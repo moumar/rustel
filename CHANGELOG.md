@@ -21,6 +21,7 @@
 - On a slow machine, an edit of a playing score arrives late instead of being refused, and the set no longer goes silent when the old score also comes back late. A dense synth score no longer refuses its edits.
 - On Linux, the audio keeps its priority over the studio, and rustelup offers to install rtkit when needed.
 - Vim mode follows Vim more closely in motions, operators, text objects, Visual mode, search, paste, undo and vimrc files.
+- In Vim mode, `J` joins the current line with the next, and a count joins that many more. The shipped `J` search for `$` labels is removed; a `nnoremap J /\$<CR>` in your vimrc keeps it.
 - The studio themes, except rustel-dark, live in [rustel-studio-themes](https://github.com/tzfm/rustel-studio-themes). A build without the `themes` feature keeps rustel-dark.
 - Add MIDI file export. `rustel export --format midi` writes a Type 1 file, one track a lane. Studio adds a MIDI format to the export sheet.
 - Add MIDI file import. `rustel import-midi` writes a score. A dropped `.mid` file or File ▸ Import MIDI opens it as a new Studio scene.

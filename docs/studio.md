@@ -974,7 +974,9 @@ copy text, and `p` or `P` to put it back. A yank or delete fills the
 register and the system clipboard, so `p` pastes the newest copy from any
 surface. `r` then a character replaces the character under the cursor, and
 a count replaces that many. `D` deletes to the end of the line.
-`C` changes that text. `v` selects characters and `V` selects lines.
+`C` changes that text. `J` joins the current line with the next, and a
+count joins that many more. A single space joins the lines, unless the line
+taken is blank or already starts or ends with whitespace. `v` selects characters and `V` selects lines.
 A selection made with the mouse or with Shift+arrows enters Visual. `d`,
 `c`, `y`, `x`, `X`, `D`, `C`, `Y`, `p`, and `P` act on it. Backspace or
 Delete deletes it, and `r` then a character replaces every selected
@@ -1036,7 +1038,7 @@ The first time you enable Vim, Studio creates `~/.rustel/vimrc` if it does not
 exist. `RUSTEL_CONFIG_DIR` changes that folder. Built-in bindings remain active
 until a map line overrides them. Studio also ships default mappings beneath
 your file. Your file overrides them line for line. The shipped mappings
-include `U` update, `Q` stop, `J` and `K` for `$` labels, `M` for `_`, `jk`
+include `U` update, `Q` stop, `K` for the `$` label, `M` for `_`, `jk`
 to leave Insert, `gcl` and `gc` to comment, and `gf` for the Reference. The
 shipped `<Space>` chords are `V` visualizers, `O` set panel, `H` and `L`
 previous and next scene, `P` local prebake, `I` panels, and `1` and `2`

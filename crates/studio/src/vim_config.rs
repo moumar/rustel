@@ -712,7 +712,7 @@ mod tests {
         let normal = mappings.for_mode(VimMappingMode::Normal);
         let visual = mappings.for_mode(VimMappingMode::Visual);
         let insert = mappings.for_mode(VimMappingMode::Insert);
-        assert_eq!(normal.len(), 17, "the 16 shipped normal maps and gd");
+        assert_eq!(normal.len(), 16, "the 15 shipped normal maps and gd");
         assert_eq!(visual.len(), 3);
         assert_eq!(insert.len(), 1);
         let replacement = |list: &[VimMapping], text: &str| {
