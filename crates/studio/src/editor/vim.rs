@@ -679,6 +679,9 @@ impl Editor {
             'o' | 'O' if self.vim.mode == Mode::Normal => {
                 self.vim_open_line(character == 'O', moment)?;
             }
+            'J' if self.vim.mode == Mode::Normal => {
+                self.vim_join_lines(count, moment)?;
+            }
             'v' | 'V' => self.vim_toggle_visual(character == 'V')?,
             'x' | 'X' | 'D' | 'C' | 'Y' => {
                 let operator = match character {
@@ -1263,6 +1266,46 @@ impl Editor {
         Ok(())
     }
 
+    /// `J` joins the current line with the next, and a count joins that
+    /// many more, as Vim's does. A single space joins the lines unless the
+    /// line taken is blank or already starts or ends with whitespace. The
+    /// caret rests where the last join was made.
+    fn vim_join_lines(
+        &mut self,
+        count: usize,
+        moment: HistoryMoment,
+    ) -> Result<(), EditorError> {
+        let line = self.document.line_of(self.vim_head())?;
+        let last = line.saturating_add(count).min(self.vim_last_line());
+        if last <= line {
+            return Ok(());
+        }
+        let mut transaction = Transaction::new(EditOrigin::Typing);
+        let mut target = self.document.line_content_range(line).end;
+        for current in line..last {
+            let end = self.document.line_content_range(current).end;
+            let next_start = self.document.line_start(current + 1);
+            let next = self.document.line_content(current + 1);
+            let space = next
+                .chars()
+                .next()
+                .is_some_and(|character| !character.is_whitespace())
+                && next
+                    .chars()
+                    .next_back()
+                    .is_some_and(|character| !character.is_whitespace());
+            transaction =
+                transaction.replace(Edit::new(end..next_start, if space { " " } else { "" }));
+            target = end;
+        }
+        self.apply_transaction(
+            transaction.with_selection(SelectionSet::single(target)),
+            moment,
+        )?;
+        self.vim_normalize_caret()?;
+        Ok(())
+    }
+
     /// `r{char}`: replace one character, or a count of them, without
     /// entering Insert. A count that runs past the line changes nothing,
     /// as Vim does.
@@ -1551,6 +1594,36 @@ mod tests {
         for keys in ["dd", "Vd"] {
             assert_eq!(typed("a\n\nb\n", 2, keys).source(), "a\nb\n", "{keys}");
         }
+    }
+
+    /// `J` joins the current line with the next, and a count joins that
+    /// many more. A single space joins the lines, and the caret rests
+    /// where the last join was made.
+    #[test]
+    fn j_joins_the_lines_below_with_one_space() {
+        assert_eq!(typed("abc\ndef", 0, "J").source(), "abc def");
+        assert_eq!(typed("abc\ndef", 1, "J").source(), "abc def");
+        assert_eq!(typed("a\nb\nc\nd", 0, "2J").source(), "a b c\nd");
+        assert_eq!(typed("a\nb\nc\nd", 0, "9J").source(), "a b c d");
+        assert_eq!(head(typed("a\nb\nc", 0, "2J")), 3);
+    }
+
+    /// `J` adds no space when the line taken is blank or starts or ends
+    /// with whitespace, and keeps the space the lines already carry.
+    #[test]
+    fn j_adds_no_space_around_whitespace() {
+        assert_eq!(typed("abc \ndef", 0, "J").source(), "abc  def");
+        assert_eq!(typed("abc\n def", 0, "J").source(), "abc def");
+        assert_eq!(typed("abc\ndef ", 0, "J").source(), "abcdef ");
+        assert_eq!(typed("abc\n\ndef", 0, "J").source(), "abc\ndef");
+    }
+
+    /// `J` on the last line changes nothing, as in Vim. The drawn line
+    /// past a final line break is no Vim line, so it joins nothing.
+    #[test]
+    fn j_on_the_last_line_keeps_the_lines() {
+        assert_eq!(typed("abc\ndef", 6, "J").source(), "abc\ndef");
+        assert_eq!(typed("abc\n", 4, "J").source(), "abc\n");
     }
 
     /// A count on a quote object stays on that one string. `2di"` deletes
