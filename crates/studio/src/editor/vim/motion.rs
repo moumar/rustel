@@ -29,10 +29,14 @@ impl Editor {
         if let Some((operator, _)) = operator {
             let head = self.vim_head();
             let motion = if operator == Operator::Change
-                && matches!(motion, Motion::WordNext)
+                && matches!(motion, Motion::WordNext | Motion::BlankWordNext)
                 && !self.vim_grapheme_is_space(head)?
             {
-                Motion::WordChange
+                if matches!(motion, Motion::BlankWordNext) {
+                    Motion::BlankWordChange
+                } else {
+                    Motion::WordChange
+                }
             } else {
                 motion
             };
@@ -56,7 +60,13 @@ impl Editor {
                     self.document.line_of(head.max(target))?,
                 )
             } else {
-                let end = if matches!(motion, Motion::WordEnd | Motion::WordChange) {
+                let end = if matches!(
+                    motion,
+                    Motion::WordEnd
+                        | Motion::WordChange
+                        | Motion::BlankWordEnd
+                        | Motion::BlankWordChange
+                ) {
                     // An inclusive end takes the character it rests on,
                     // never a line break. e rests on a line end only at
                     // the end of the text.
@@ -232,7 +242,14 @@ impl Editor {
                 };
                 self.document.indent_end(target_line)
             }
-            Motion::WordNext | Motion::WordPrevious | Motion::WordEnd | Motion::WordChange => {
+            Motion::WordNext
+            | Motion::WordPrevious
+            | Motion::WordEnd
+            | Motion::WordChange
+            | Motion::BlankWordNext
+            | Motion::BlankWordPrevious
+            | Motion::BlankWordEnd
+            | Motion::BlankWordChange => {
                 self.vim_word_target(head, motion, count_nonzero, operator)
             }
         };
@@ -269,8 +286,9 @@ impl Editor {
             .all(char::is_whitespace))
     }
 
-    /// Where `w`, `b`, `e` or the `cw` form of `e` takes the caret. An
-    /// operator's `w` stops its last word at the end of its line.
+    /// Where `w`, `b`, `e`, their blank forms or the `cw` form of `e`
+    /// takes the caret. An operator's `w` stops its last word at the end
+    /// of its line.
     fn vim_word_target(
         &self,
         head: ByteOffset,
@@ -279,11 +297,18 @@ impl Editor {
         operator: bool,
     ) -> ByteOffset {
         let text = self.document.text();
-        let mut walk = WordWalk::new(&text, head.0);
+        let blank = matches!(
+            motion,
+            Motion::BlankWordNext
+                | Motion::BlankWordPrevious
+                | Motion::BlankWordEnd
+                | Motion::BlankWordChange
+        );
+        let mut walk = WordWalk::new(&text, head.0, blank);
         match motion {
-            Motion::WordPrevious => walk.back_word(count),
-            Motion::WordEnd => walk.end_word(count, false),
-            Motion::WordChange => walk.end_word(count, true),
+            Motion::WordPrevious | Motion::BlankWordPrevious => walk.back_word(count),
+            Motion::WordEnd | Motion::BlankWordEnd => walk.end_word(count, false),
+            Motion::WordChange | Motion::BlankWordChange => walk.end_word(count, true),
             _ => walk.forward_word(count, operator),
         }
         ByteOffset(
@@ -338,11 +363,13 @@ struct WordWalk {
     end: usize,
     /// Where the last line starts.
     last_line: usize,
+    /// Whether punctuation belongs to the word, as for `W`, `B` and `E`.
+    blank: bool,
     index: usize,
 }
 
 impl WordWalk {
-    fn new(text: &str, head: usize) -> Self {
+    fn new(text: &str, head: usize, blank: bool) -> Self {
         let clusters = text
             .grapheme_indices(true)
             .map(|(offset, cluster)| (offset, word_class(cluster), line_ending_len(cluster) > 0))
@@ -359,6 +386,7 @@ impl WordWalk {
             clusters,
             end,
             last_line,
+            blank,
             index,
         }
     }
@@ -371,12 +399,18 @@ impl WordWalk {
         self.at_line_end() && (self.index == 0 || self.clusters[self.index - 1].2)
     }
 
-    /// The word class here. A line end is blank.
+    /// The word class here. A line end is blank. In a blank walk,
+    /// punctuation is a word character, so only blanks divide words.
     fn class(&self) -> u8 {
         if self.at_line_end() {
             0
         } else {
-            self.clusters[self.index].1
+            let class = self.clusters[self.index].1;
+            if self.blank && class == 2 {
+                1
+            } else {
+                class
+            }
         }
     }
 
@@ -502,6 +536,9 @@ pub(super) fn motion_for(character: char) -> Option<Motion> {
         'w' => Some(Motion::WordNext),
         'b' => Some(Motion::WordPrevious),
         'e' => Some(Motion::WordEnd),
+        'W' => Some(Motion::BlankWordNext),
+        'B' => Some(Motion::BlankWordPrevious),
+        'E' => Some(Motion::BlankWordEnd),
         'G' => Some(Motion::LastLine),
         _ => None,
     }

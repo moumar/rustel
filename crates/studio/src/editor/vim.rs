@@ -86,6 +86,10 @@ enum Motion {
     WordPrevious,
     WordEnd,
     WordChange,
+    BlankWordNext,
+    BlankWordPrevious,
+    BlankWordEnd,
+    BlankWordChange,
     FirstLine,
     LastLine,
 }
@@ -1771,6 +1775,46 @@ mod tests {
         assert_eq!(head(&typed("foo\n\nbar", 0, "w")), 4);
         assert_eq!(head(&typed("foo\n\nbar", 5, "b")), 4);
         assert_eq!(head(&typed("foo\n\n\nbar", 0, "2w")), 5);
+    }
+
+    /// `W`, `B` and `E` split words on blanks only, so punctuation stays
+    /// in the word, as in Vim. The lowercase motions still split on it.
+    #[test]
+    fn capital_word_motions_split_on_blanks_only() {
+        assert_eq!(head(&typed("foo_bar baz", 0, "W")), 8);
+        assert_eq!(head(&typed("foo_bar baz", 8, "B")), 0);
+        assert_eq!(head(&typed("foo_bar baz", 7, "B")), 0);
+        assert_eq!(head(&typed("foo_bar baz", 0, "E")), 6);
+        assert_eq!(head(&typed("foo_bar baz", 7, "E")), 10);
+        assert_eq!(head(&typed("foo_bar baz", 10, "2B")), 0);
+        assert_eq!(head(&typed("foo_bar baz", 0, "w")), 3);
+        assert_eq!(head(&typed("foo_bar baz", 8, "b")), 4);
+        assert_eq!(head(&typed("foo_bar baz", 0, "e")), 2);
+    }
+
+    /// The capital motions cross line ends and stop on an empty line the
+    /// way the lowercase ones do.
+    #[test]
+    fn capital_word_motions_cross_lines() {
+        assert_eq!(head(&typed("foo\nbar", 0, "W")), 4);
+        assert_eq!(head(&typed("foo\nbar", 4, "B")), 0);
+        assert_eq!(head(&typed("foo\n\nbar", 0, "W")), 4);
+        assert_eq!(head(&typed("foo\n\nbar", 5, "B")), 4);
+    }
+
+    /// The operators take the blank words whole: `dW` and `dB` go past
+    /// the blanks, and `dE` and `cE` rest on the word's last character.
+    #[test]
+    fn operators_take_blank_words_as_vim_does() {
+        assert_eq!(typed("foo_bar baz", 0, "dW").source(), "baz");
+        assert_eq!(typed("foo_bar baz", 8, "dB").source(), "baz");
+        assert_eq!(typed("foo_bar baz", 0, "dE").source(), " baz");
+        assert_eq!(typed("foo_bar baz", 2, "cE").source(), "fo baz");
+        assert_eq!(typed("foo_bar baz", 0, "cW").source(), " baz");
+        assert_eq!(
+            typed("foo_bar baz", 0, "yW").vim_register(),
+            Some("foo_bar ")
+        );
     }
 
     /// A yank leaves the caret where the yanked text starts, so a yank

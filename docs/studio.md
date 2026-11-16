@@ -966,7 +966,7 @@ beside warnings and errors. Vim uses a steady block in Normal and Visual and
 a steady bar in Insert. The caret shape setting applies outside Vim. Studio
 saves this choice in `studio.json`.
 
-Vim supports `hjkl`, word motions (`w`, `b`, `e`), `0`, `^`, `$`, `gg`, and `G`.
+Vim supports `hjkl`, word motions (`w`, `b`, `e` and the blank forms `W`, `B`, `E`), `0`, `^`, `$`, `gg`, and `G`.
 Use `dd` to delete a line or `:42` then Enter to go to line 42. Counts work
 with motions and edits, such as `3j` and `2dd`. Use `a`, `I`, `A`, `o`, and `O`
 to enter Insert mode, `d`, `c`, and `y` with a motion to delete, change, or
