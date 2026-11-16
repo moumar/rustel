@@ -518,6 +518,17 @@ impl Editor {
         }
         if self.vim.mode == Mode::Insert {
             self.vim.message = None;
+            if key.modifiers == KeyModifiers::CONTROL
+                && matches!(key.code, KeyCode::Char('a' | 'A' | 'x' | 'X'))
+            {
+                self.vim_adjust_number(
+                    matches!(key.code, KeyCode::Char('a' | 'A')),
+                    moment,
+                )?;
+                return Ok(true);
+            }
+            // Vim's insert-mode Ctrl+A and Ctrl+X count the number under
+            // the caret up and down. They do not select all or cut.
             return Ok(false);
         }
         // A mouse drag or a Shift+arrow selection is still a selection.
@@ -1358,6 +1369,174 @@ impl Editor {
         Ok(())
     }
 
+    /// Vim's insert-mode Ctrl+A and Ctrl+X: the number under the caret, or
+    /// the one it stands right after, counts up or down by one. The caret
+    /// keeps its place, and the number keeps its width and its `0x`, `0b`
+    /// or leading-zero form.
+    fn vim_adjust_number(
+        &mut self,
+        increment: bool,
+        moment: HistoryMoment,
+    ) -> Result<(), EditorError> {
+        let head = self.vim_head();
+        let line = self.document.line_of(head)?;
+        let range = self.document.line_content_range(line);
+        let text = self.document.line_content(line);
+        let relative = head.0.saturating_sub(range.start.0);
+        let at = |offset: usize| text.get(offset..).and_then(|rest| rest.chars().next());
+        let before = |offset: usize| {
+            (offset > 0).then(|| text.floor_char_boundary(offset - 1))
+        };
+        // `b` and `x` are not digits here: they belong to the 0b and 0x
+        // prefixes, so a caret on one of them counts nothing.
+        let is_hex: fn(char) -> bool = |character| {
+            character.is_ascii_hexdigit() && !matches!(character, 'b' | 'B' | 'x' | 'X')
+        };
+        // The number the caret stands on, or the one it stands right
+        // after: the anchor digit, and whether the run ends at the caret.
+        let (anchor, ends_at_caret) = if let Some(character) = at(relative) {
+            if character.is_ascii_digit() || is_hex(character) {
+                (relative, false)
+            } else if let Some(previous) = before(relative) {
+                let character = at(previous).unwrap_or('\0');
+                if character.is_ascii_digit() || is_hex(character) {
+                    (previous, true)
+                } else {
+                    return Ok(());
+                }
+            } else {
+                return Ok(());
+            }
+        } else if let Some(previous) = before(relative) {
+            let character = at(previous).unwrap_or('\0');
+            if character.is_ascii_digit() || is_hex(character) {
+                (previous, true)
+            } else {
+                return Ok(());
+            }
+        } else {
+            return Ok(());
+        };
+        let is_digit: fn(char) -> bool = if at(anchor).unwrap_or('\0').is_ascii_digit() {
+            |character| character.is_ascii_digit()
+        } else {
+            is_hex
+        };
+        let mut start = anchor;
+        while let Some(previous) = before(start) {
+            if is_digit(at(previous).unwrap_or('\0')) {
+                start = previous;
+            } else {
+                break;
+            }
+        }
+        let mut end = relative;
+        if !ends_at_caret {
+            while let Some(character) = at(end) {
+                if is_digit(character) {
+                    end += character.len_utf8();
+                } else {
+                    break;
+                }
+            }
+        }
+        // The 0x and 0b prefixes name the base and extend the digits; a
+        // leading zero names octal, as in Vim.
+        let digits = &text[start..end];
+        let before_start = before(start).and_then(at);
+        let before_before = before(start)
+            .and_then(|offset| before(offset))
+            .and_then(at);
+        let after_end = at(end);
+        let mut prefix = "";
+        let mut base = 10u32;
+        if digits == "0" && matches!(after_end, Some('x' | 'X')) {
+            base = 16;
+            prefix = "0x";
+            end += 1;
+            while let Some(character) = at(end) {
+                if character.is_ascii_hexdigit() {
+                    end += character.len_utf8();
+                } else {
+                    break;
+                }
+            }
+        } else if digits == "0" && matches!(after_end, Some('b' | 'B')) {
+            base = 2;
+            prefix = "0b";
+            end += 1;
+            while let Some(character) = at(end) {
+                if matches!(character, '0' | '1') {
+                    end += character.len_utf8();
+                } else {
+                    break;
+                }
+            }
+        } else if matches!(before_start, Some('x' | 'X'))
+            && before_before == Some('0')
+            && digits.chars().all(|character| character.is_ascii_hexdigit())
+        {
+            base = 16;
+            while let Some(character) = at(end) {
+                if character.is_ascii_hexdigit() {
+                    end += character.len_utf8();
+                } else {
+                    break;
+                }
+            }
+        } else if matches!(before_start, Some('b' | 'B'))
+            && before_before == Some('0')
+            && digits.chars().all(|character| matches!(character, '0' | '1'))
+        {
+            base = 2;
+            while let Some(character) = at(end) {
+                if matches!(character, '0' | '1') {
+                    end += character.len_utf8();
+                } else {
+                    break;
+                }
+            }
+        } else if digits.len() > 1 && digits.starts_with('0') {
+            base = 8;
+        }
+        let value_digits = if prefix.is_empty() {
+            &text[start..end]
+        } else {
+            &text[start + prefix.len()..end]
+        };
+        let Ok(value) = u64::from_str_radix(value_digits, base) else {
+            return Ok(());
+        };
+        let value = if increment {
+            value.saturating_add(1)
+        } else {
+            value.saturating_sub(1)
+        };
+        let width = value_digits.len();
+        let rendered = match base {
+            16 => format!("{prefix}{value:0width$x}"),
+            2 => format!("{prefix}{value:0width$b}"),
+            8 => format!("{value:0width$o}"),
+            _ => format!("{value:0width$}"),
+        };
+        let start_byte = range.start.0 + start;
+        let end_byte = range.start.0 + end;
+        // The caret keeps its place: the same spot inside the number, or
+        // right after it.
+        let new_head = if head.0 >= end_byte {
+            ByteOffset(start_byte + rendered.len())
+        } else {
+            ByteOffset(start_byte + (head.0 - start_byte).min(rendered.len()))
+        };
+        self.apply_transaction(
+            Transaction::new(EditOrigin::Typing)
+                .replace(Edit::new(ByteOffset(start_byte)..ByteOffset(end_byte), rendered))
+                .with_selection(SelectionSet::single(new_head)),
+            moment,
+        )?;
+        Ok(())
+    }
+
     /// Visual `r`: every selected character becomes the typed character.
     /// Line breaks stay, so a linewise selection keeps its lines.
     fn vim_replace_selection(
@@ -1609,7 +1788,7 @@ mod tests {
         assert_eq!(typed("abc\ndef", 1, "J").source(), "abc def");
         assert_eq!(typed("a\nb\nc\nd", 0, "2J").source(), "a b c\nd");
         assert_eq!(typed("a\nb\nc\nd", 0, "9J").source(), "a b c d");
-        assert_eq!(head(typed("a\nb\nc", 0, "2J")), 3);
+        assert_eq!(head(&typed("a\nb\nc", 0, "2J")), 3);
     }
 
     /// `J` adds no space when the line taken is blank or starts or ends
@@ -1778,7 +1957,8 @@ mod tests {
     }
 
     /// `W`, `B` and `E` split words on blanks only, so punctuation stays
-    /// in the word, as in Vim. The lowercase motions still split on it.
+    /// in the word, as in Vim. The lowercase motions split on punctuation
+    /// too, though never on the underscore, which is a word character.
     #[test]
     fn capital_word_motions_split_on_blanks_only() {
         assert_eq!(head(&typed("foo_bar baz", 0, "W")), 8);
@@ -1787,9 +1967,9 @@ mod tests {
         assert_eq!(head(&typed("foo_bar baz", 0, "E")), 6);
         assert_eq!(head(&typed("foo_bar baz", 7, "E")), 10);
         assert_eq!(head(&typed("foo_bar baz", 10, "2B")), 0);
-        assert_eq!(head(&typed("foo_bar baz", 0, "w")), 3);
-        assert_eq!(head(&typed("foo_bar baz", 8, "b")), 4);
-        assert_eq!(head(&typed("foo_bar baz", 0, "e")), 2);
+        assert_eq!(head(&typed("foo_bar baz", 0, "w")), 8);
+        assert_eq!(head(&typed("foo_bar baz", 8, "b")), 0);
+        assert_eq!(head(&typed("foo_bar baz", 0, "e")), 6);
     }
 
     /// The capital motions cross line ends and stop on an empty line the
@@ -1815,6 +1995,42 @@ mod tests {
             typed("foo_bar baz", 0, "yW").vim_register(),
             Some("foo_bar ")
         );
+    }
+
+    /// Insert-mode Ctrl+A and Ctrl+X count the number under the caret, or
+    /// the one it stands right after, up and down, as in Vim. The caret
+    /// keeps its place, and the number keeps its width and prefix.
+    #[test]
+    fn insert_ctrl_a_and_ctrl_x_count_the_number_under_the_caret() {
+        let adjust = |source: &str, caret: usize, increment: bool| -> Editor {
+            let mut editor = typed(source, caret, "i");
+            press(
+                &mut editor,
+                KeyCode::Char(if increment { 'a' } else { 'x' }),
+                KeyModifiers::CONTROL,
+            );
+            editor
+        };
+        assert_eq!(adjust("s(5)", 3, true).source(), "s(6)");
+        assert_eq!(adjust("s(5)", 3, false).source(), "s(4)");
+        // `a` leaves the caret right after the number, which counts too.
+        let mut editor = typed("s(5)", 2, "a");
+        press(&mut editor, KeyCode::Char('a'), KeyModifiers::CONTROL);
+        assert_eq!(editor.source(), "s(6)");
+        assert_eq!(head(&editor), 3);
+        // A leading zero names octal, and the width and caret keep their
+        // places.
+        let editor = adjust("s(007)", 3, true);
+        assert_eq!(editor.source(), "s(010)");
+        assert_eq!(head(&editor), 3);
+        assert_eq!(adjust("s(077)", 3, true).source(), "s(100)");
+        assert_eq!(adjust("s(077)", 3, false).source(), "s(076)");
+        // 0x and 0b keep their form.
+        assert_eq!(adjust("s(0xff)", 4, true).source(), "s(0x100)");
+        assert_eq!(adjust("s(0b101)", 4, true).source(), "s(0b110)");
+        // Zero does not count negative, and no number counts nothing.
+        assert_eq!(adjust("s(0)", 3, false).source(), "s(0)");
+        assert_eq!(adjust("s(x)", 3, true).source(), "s(x)");
     }
 
     /// A yank leaves the caret where the yanked text starts, so a yank

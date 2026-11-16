@@ -982,7 +982,10 @@ A selection made with the mouse or with Shift+arrows enters Visual. `d`,
 Delete deletes it, and `r` then a character replaces every selected
 character. Esc returns to Normal. `u` undoes an edit. Ctrl+R in Normal or Visual mode redoes it.
 `:redo` then Enter also redoes an edit. Ctrl+D and Ctrl+U move half a page
-down and up. A count moves that many lines.
+down and up. A count moves that many lines. In Insert mode, Ctrl+A and
+Ctrl+X count the number under the caret, or the one it stands right after,
+up and down by one. The number keeps its width and its `0x`, `0b` or
+leading-zero form, and the caret keeps its place.
 
 `/` searches forward and `?` backward. Edit > Find opens `/`. Type a regular
 expression and press Enter. `n` repeats the search and `N` repeats it in the
